@@ -12,6 +12,7 @@ import torch.optim as optim
 import torch
 import datetime
 import distutils.util
+from collections import defaultdict
 
 DEVICE = "cpu"  # 'cuda' if torch.cuda.is_available() else 'cpu'
 
@@ -21,14 +22,14 @@ DEVICE = "cpu"  # 'cuda' if torch.cuda.is_available() else 'cpu'
 def define_parameters():
     params = dict()
     # Neural Network
-    params["epsilon_decay_linear"] = 1 / 50
+    params["epsilon_decay_linear"] = 1 / 100
     params["learning_rate"] = 0.00013629
     params["first_layer_size"] = 200  # neurons in the first layer
     params["second_layer_size"] = 20  # neurons in the second layer
     params["third_layer_size"] = 50  # neurons in the third layer
-    params["episodes"] = 1000
-    params["memory_size"] = 2500
-    params["batch_size"] = 1000
+    params["episodes"] = 105
+    params["memory_size"] = 200000
+    params["batch_size"] = 200000
     # Settings
     params["weights_path"] = "weights/weights.h5"
     params["train"] = True
@@ -45,19 +46,6 @@ def get_record(score: float, record: float):
         return score
     else:
         return record
-
-
-def initialize_game(idle_game: IdleGame, agent: DQNAgent, batch_size: int):
-    state_init1 = idle_game.get_state()
-    action_index = 0
-    action = idle_game.one_hot_actions(action_index)
-    idle_game.execute_action(action_index)
-    idle_game.step()
-    state_init2 = idle_game.get_state()
-    reward1 = idle_game.get_reward()
-    agent.set_reward(reward1)
-    agent.remember(state_init1, action, reward1, state_init2, False)
-    agent.replay_new(agent.memory, batch_size)
 
 
 def plot_seaborn(array_counter, array_score, train):
@@ -101,7 +89,7 @@ def run(params: dict):
     """
     # state (input) is equal to the number of actions, minus 1 (do nothing)
     # plus 3 (time, money, all time high money)
-    input_size: int = len(IdleGame().actions) + 2
+    input_size: int = len(IdleGame().actions) + 1
     output_size: int = len(IdleGame().actions)
     agent: DQNAgent = DQNAgent(params, input_size, output_size)
     agent = agent.to(DEVICE)
@@ -114,21 +102,28 @@ def run(params: dict):
     record: float = 0
     total_score: float = 0
     while counter_games < params["episodes"]:
+        zero_counts: float = 0
         # Initialize classes
         idle_game: IdleGame = IdleGame()
+        counter: defaultdict = defaultdict(lambda: 0)
+
+        if not params["train"]:
+            agent.epsilon = 0.01
+        else:
+            # agent.epsilon is set to give randomness to actions
+            agent.epsilon = max(1 - (counter_games * params["epsilon_decay_linear"]), 0)
+            # if counter_games < 1000:
+            #     agent.epsilon = 0.01
+            # else:
+            #     agent.epsilon = 0
 
         # Perform first move
-        initialize_game(idle_game, agent, params["batch_size"])
+        agent.memory.clear()
+        agent.reward = 0
 
         steps: int = 0  # steps since the last positive reward
-        while steps < 1000:
-            if not params["train"]:
-                agent.epsilon = 0.01
-            else:
-                # agent.epsilon is set to give randomness to actions
-                agent.epsilon = 1 - (counter_games * params["epsilon_decay_linear"])
-
-            agent.epsilon = max(agent.epsilon, 0.1)
+        max_steps: int = 10000
+        while steps < max_steps:
 
             # get old state
             state_old = np.asarray(idle_game.get_state())
@@ -143,40 +138,48 @@ def run(params: dict):
                     state_old_tensor = torch.tensor(
                         state_old.reshape((1, input_size)), dtype=torch.float32
                     ).to(DEVICE)
-                    prediction = agent(state_old_tensor)
-                    move_index = np.argmax(prediction.detach().cpu().numpy()[0])
+                    prediction = agent(state_old_tensor).detach().cpu().numpy()[0]
+                    valid_actions = idle_game.valid_actions()
+                    # I bet there is a much more pythonic way of doing this
+                    for i in range(len(prediction)):
+                        if i not in valid_actions:
+                            prediction[i] = 0
+                    move_index = np.argmax(prediction)
                     final_move = np.eye(input_size)[move_index]
+                    # print(move_index, prediction, valid_actions)
 
             # perform new move and get new state
-            # print(move_index)
+
             # print(final_move)
             # action_index = 0
             # action = idle_game.one_hot_actions(action_index)
+            counter[move_index] = counter[move_index] + 1
             idle_game.execute_action(move_index)
-            idle_game.step()
+
+            simulation_steps: int = 1  # random.randint(1, max_steps // 1000)
+            # print(simulation_steps)
+
+            idle_game.step(simulation_steps)
 
             state_new = idle_game.get_state()
 
             # set reward for the new state
             reward = idle_game.get_reward()
-            is_over = idle_game.is_over()
 
             if params["train"]:
-                # train short memory base on the new action and state
-                agent.train_short_memory(
-                    state_old, final_move, reward, state_new, is_over
-                )
+                agent.set_reward(reward)
                 # store the new data into a long term memory
-                agent.remember(state_old, final_move, reward, state_new, is_over)
+                agent.remember(state_old, move_index, reward, state_new)
 
             # record = get_record(game.score, record)
-            steps += 1
+            steps += simulation_steps
         if params["train"]:
             agent.replay_new(agent.memory, params["batch_size"])
         counter_games += 1
         total_score = idle_game.get_reward()
+        agent.upsample()
         print(
-            f"Game {counter_games}      Score: {total_score}      State: {idle_game.get_state()}    Mistakes: {idle_game.mistakes}"
+            f"Game {counter_games}      Score: {total_score}      State: {idle_game.get_state()}    Mistakes: {idle_game.mistakes}      Moves: {counter}       Epsilon: {agent.epsilon}"
         )
         score_plot.append(total_score)
         counter_plot.append(counter_games)

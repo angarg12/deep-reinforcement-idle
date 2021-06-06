@@ -8,7 +8,7 @@ import random
 
 @dataclass
 class Building:
-    cost: float
+    price: float
     power: float
 
 
@@ -28,23 +28,19 @@ class State:
     reward: float = 0
 
 
-# print(actions)
-# print(action_indexes)
-
-
 class IdleGame:
     buildings = {
-        "generator1": Building(cost=150, power=1),
-        "generator2": Building(cost=1000, power=10),
-        "generator3": Building(cost=11000, power=80),
-        "generator4": Building(cost=120000, power=470),
-        "generator5": Building(cost=1300000, power=2600),
-        "generator6": Building(cost=1.4e7, power=14000),
-        "generator7": Building(cost=20e7, power=78000),
-        "generator8": Building(cost=330e7, power=440000),
-        "generator9": Building(cost=5.1e10, power=2600000),
-        "generator10": Building(cost=75e10, power=1.6e7),
-        "generator11": Building(cost=1e13, power=10e7),
+        "generator1": Building(price=150, power=1),
+        "generator2": Building(price=1000, power=10),
+        "generator3": Building(price=11000, power=80),
+        "generator4": Building(price=120000, power=470),
+        "generator5": Building(price=1300000, power=2600),
+        "generator6": Building(price=1.4e7, power=14000),
+        "generator7": Building(price=20e7, power=78000),
+        "generator8": Building(price=330e7, power=440000),
+        "generator9": Building(price=5.1e10, power=2600000),
+        "generator10": Building(price=75e10, power=1.6e7),
+        "generator11": Building(price=1e13, power=10e7),
     }
 
     upgrades = {
@@ -117,7 +113,7 @@ class IdleGame:
 
     def buy_building(self, building: str):
         price = self.total_price(
-            self.buildings[building].cost, self.state.buildings_owned[building]
+            self.buildings[building].price, self.state.buildings_owned[building]
         )
         if price * self.building_buy_buffer <= self.state.money:
             self.state.money -= price
@@ -136,7 +132,7 @@ class IdleGame:
         best_ratio = 0
         for building in self.buildings:
             ratio = self.buildings[building].power / self.total_price(
-                self.buildings[building].cost, self.state.buildings_owned[building]
+                self.buildings[building].price, self.state.buildings_owned[building]
             )
             if ratio > best_ratio:
                 best_ratio = ratio
@@ -160,16 +156,16 @@ class IdleGame:
             if self.buy_upgrade(upgrade):
                 return
 
-    def calculate_production(self):
+    def calculate_production(self, steps: int):
         for building in self.buildings:
-            building_power: number = self.buildings[building].power
+            building_power: float = self.buildings[building].power
             for upgrade in self.state.upgrades_owned:
                 if self.state.upgrades_owned[upgrade] and upgrade.startswith(
                     f"{building}-"
                 ):
                     building_power *= self.upgrades[upgrade].power
             self.state.money += self.state.buildings_owned[building] * building_power
-        self.state.money += self.click_money
+        self.state.money += self.click_money * steps
         self.state.highest_money = max(self.state.highest_money, self.state.money)
 
     def get_state(self):
@@ -181,7 +177,7 @@ class IdleGame:
 
         vals.append(self.state.money)
         vals.append(self.state.highest_money)
-        vals.append(self.state.time)
+        # vals.append(self.state.time)
         return vals
 
     def print_state(self, action: str):
@@ -196,14 +192,13 @@ class IdleGame:
         success = True
         if action in self.buildings:
             success = self.buy_building(action)
-        if action in self.upgrades:
+        elif action in self.upgrades:
             success = self.buy_upgrade(action)
         if not success:
             self.mistakes += 1
-        #     self.state.reward = -1
-        # else:
-        self.state.reward = self.state.highest_money
-        # print(index, action, success)
+            self.state.reward = -1
+        else:
+            self.state.reward = self.state.highest_money
 
     def one_hot_actions(self, index: int):
         # print(len(self.actions), index)
@@ -211,18 +206,36 @@ class IdleGame:
         one_hot[index] = 1
         return one_hot
 
-    def random_action(self):
-        return random.randint(0, len(self.actions) - 1)
+    def valid_actions(self):
+        valid_actions = [0]
+        for action, index in self.action_indexes.items():
+            if action in self.buildings:
+                price = self.total_price(
+                    self.buildings[action].price, self.state.buildings_owned[action]
+                )
+                if price <= self.state.money:
+                    valid_actions += [index]
+            if (
+                action in self.upgrades
+                and not self.state.upgrades_owned[action]
+                and self.upgrades[action].price <= self.state.money
+            ):
+                valid_actions += [index]
+        return valid_actions
 
-    def step(self):
-        self.calculate_production()
-        self.state.time += 1
+    def random_action(self):
+        valid_actions = self.valid_actions()
+        return valid_actions[random.randint(0, len(valid_actions) - 1)]
+
+    def step(self, steps: int):
+        self.calculate_production(steps)
+        self.state.time += steps
 
     def is_over(self):
         return self.state.money < self.goal
 
     def run(self):
-        while self.state.money < self.goal:
+        while self.state.time < 100000:
             # if self.state.time % 1000 == 0:
             #     self.print_state("nothing")
 
@@ -230,7 +243,7 @@ class IdleGame:
             self.buy_best_ratio_building()
             self.buy_cheapest_upgrade()
 
-            self.step()
+            self.step(1)
 
         self.print_state("nothing")
 
